@@ -52,83 +52,33 @@ async function createConversation() {
 
 async function handleStreamResponse(reader) {
   let assistantMessage = '';
-  console.log('Starting to read stream');
   
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      console.log('Stream reading complete');
-      break;
-    }
-    
-    const chunk = new TextDecoder().decode(value);
-    console.log('Received chunk:', chunk);
-    
-    const lines = chunk.split('\n');
-    let currentEvent = '';
-    let currentData = '';
-    
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim();
-        console.log('Event:', currentEvent);
-      } else if (line.startsWith('data: ')) {
-        currentData = line.slice(6).trim();
-        console.log('Data:', currentData);
-      } else if (line === '' && currentEvent && currentData) {
-        // Process complete event
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const text = new TextDecoder().decode(value);
+      const lines = text.split('\n');
+      
+      for (const line of lines) {
+        if (!line.trim() || !line.startsWith('data: ')) continue;
+        
         try {
-          const data = JSON.parse(currentData);
-          console.log('Processing event:', currentEvent, data);
-          
-          switch (currentEvent) {
-            case 'thread.message.created':
-              isTyping.value = true;
-              break;
-
-            case 'thread.message.completed':
-              if (data.content) {
-                console.log('Got message content:', data.content);
-                assistantMessage = data.content;
-                isTyping.value = false;
-              }
-              break;
-              
-            case 'thread.run.failed':
-            case 'error':
-              isTyping.value = false;
-              console.error('Error event:', data);
-              throw new Error(data.error || 'An error occurred');
-              
-            case 'thread.run.cancelled':
-            case 'thread.run.expired':
-              isTyping.value = false;
-              console.warn(`Run ${currentEvent}:`, data);
-              break;
-
-            case 'thread.run.queued':
-            case 'thread.run.in_progress':
-              isTyping.value = true;
-              break;
-              
-            case 'done':
-              console.log('Stream complete');
-              isTyping.value = false;
-              break;
+          const data = JSON.parse(line.slice(5).trim());
+          if (data.content) {
+            return data.content;
           }
         } catch (e) {
-          console.error('Error parsing SSE data:', e);
-          throw e;
+          console.error('Error parsing JSON:', e);
         }
-        
-        // Reset event/data
-        currentEvent = '';
-        currentData = '';
       }
     }
+  } catch (err) {
+    console.error('Stream reading error:', err);
+    throw err;
   }
   
-  console.log('Final assistant message:', assistantMessage);
   return assistantMessage;
 }
 
@@ -142,11 +92,6 @@ async function sendMessage() {
   try {
     isLoading.value = true;
     messages.value.push({ content: messageContent, role: 'user' });
-
-    // Check if we need to recreate the conversation
-    if (!threadId.value) {
-      await createConversation();
-    }
 
     const response = await fetch(
       `${api_base}/assistants/${conversationId.value}/send_message/`, 
@@ -168,10 +113,9 @@ async function sendMessage() {
         body: errorText
       });
       
-      // If thread not found, recreate conversation
       if (response.status === 404) {
         await createConversation();
-        return sendMessage(); // Retry sending the message
+        return sendMessage();
       }
       
       throw new Error(`Failed to send message: ${errorText}`);
