@@ -8,8 +8,9 @@ const isLoading = ref(false);
 const error = ref(null);
 const isTyping = ref(false);
 
-const api_key = app_props.VITE_API_KEY;
-const api_base = app_props.VITE_API_BASE || 'http://localhost:8000/api/v1';
+// Access environment variables safely
+const api_key = import.meta.env.VITE_API_KEY;
+const api_base = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api/v1';
 
 // Auto-scroll messages
 watch(messages, async () => {
