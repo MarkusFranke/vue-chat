@@ -1,5 +1,6 @@
 services:
-  # For production:
+
+  # Production service
   frontend:
     build:
       context: .
@@ -10,30 +11,26 @@ services:
     environment:
       - NODE_ENV=production
     env_file:
-      - ./config/.env
+      - ./.env
     restart: unless-stopped
-    networks:
-      - chat-network
-    command: node vueBaseAppServer.js
 
-  # Development service for hot-reloading
+  # Development service with hot-reloading
   frontend-dev:
     build:
       context: .
-      target: build-stage
+      dockerfile: Dockerfile.dev
     container_name: vue-chat-frontend-dev
     ports:
       - "5173:5173"
     environment:
       - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
     env_file:
-      - ./config/.env
+      - ./.env
     volumes:
-      - ./:/app
+      - .:/app
       - /app/node_modules
     command: npm run dev
-    networks:
-      - chat-network
 
 networks:
   chat-network:

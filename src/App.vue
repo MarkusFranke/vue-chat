@@ -3,16 +3,10 @@ import { ref, onMounted, watch, nextTick } from 'vue';
 
 const messages = ref([]);
 const newMessage = ref('');
-const currentConversation = ref(null);
+const conversationId = ref(null);
 const isLoading = ref(false);
 const error = ref(null);
 const isTyping = ref(false);
-const reconnectAttempts = ref(0);
-const MAX_RECONNECTS = 3;
-
-// Generate random visitor ID that persists for the session
-const visitor_id = ref(localStorage.getItem('visitorId') || Math.random().toString(36).substring(7));
-localStorage.setItem('visitorId', visitor_id.value);
 
 const api_key = app_props.VITE_API_KEY;
 const api_base = app_props.VITE_API_BASE || 'http://localhost:8000/api/v1';
@@ -32,28 +26,29 @@ async function createConversation() {
       method: 'POST',
       headers: {
         'Authorization': `ApiKey ${api_key}`,
-        'X-Visitor-ID': visitor_id.value,
         'Content-Type': 'application/json'
       }
     });
     
-    if (!response.ok) throw new Error('Failed to create conversation');
+    if (!response.ok) {
+      throw new Error('Invalid API key configuration. Please check your .env file.');
+    }
     
     const data = await response.json();
-    currentConversation.value = data.id;
+    conversationId.value = data.id;
     
     // Add welcome message
     messages.value.push({
       content: "Hello! How can I help you today?",
       role: 'assistant'
     });
-  } catch (error) {
-    handleError('Failed to start conversation', error);
+  } catch (err) {
+    error.value = err.message;
   }
 }
 
 async function sendMessage() {
-  if (!newMessage.value.trim() || !currentConversation.value) return;
+  if (!newMessage.value.trim() || !conversationId.value) return;
   
   const messageContent = newMessage.value;
   newMessage.value = '';
@@ -69,12 +64,11 @@ async function sendMessage() {
     });
     
     const response = await fetch(
-      `${api_base}/assistants/${currentConversation.value}/send-message/`,
+      `${api_base}/assistants/${conversationId.value}/send-message/`,
       {
         method: 'POST',
         headers: {
           'Authorization': `ApiKey ${api_key}`,
-          'X-Visitor-ID': visitor_id.value,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ message: messageContent })
@@ -82,10 +76,6 @@ async function sendMessage() {
     );
 
     if (!response.ok) {
-      if (response.status === 429) {
-        const data = await response.json();
-        throw new Error(`Rate limit exceeded. Please try again in ${data.retry_after} seconds.`);
-      }
       throw new Error('Failed to send message');
     }
 
@@ -121,34 +111,12 @@ async function sendMessage() {
         role: 'assistant'
       });
     }
-  } catch (error) {
-    handleError('Message sending failed', error);
-    // Try to recreate conversation if expired
-    if (error.message.includes('expired')) {
-      await reconnect();
-    }
+  } catch (err) {
+    error.value = err.message;
   } finally {
     isLoading.value = false;
     isTyping.value = false;
   }
-}
-
-async function reconnect() {
-  if (reconnectAttempts.value >= MAX_RECONNECTS) {
-    error.value = 'Maximum reconnection attempts reached. Please refresh the page.';
-    return;
-  }
-  reconnectAttempts.value++;
-  await createConversation();
-}
-
-function handleError(context, error) {
-  console.error(`${context}:`, error);
-  messages.value.push({
-    content: error.message || 'An error occurred. Please try again.',
-    role: 'error'
-  });
-  error.value = error.message;
 }
 
 // Initialize
@@ -159,10 +127,10 @@ onMounted(() => {
 
 <template>
   <div class="chat-container">
-    <div class="chat-interface">
-      <div v-if="error" class="error-banner">
-        {{ error }}
-      </div>
+    <div v-if="error" class="error-banner">
+      {{ error }}
+    </div>
+    <div v-else class="chat-interface">
       <div class="messages" ref="messageContainer">
         <div
           v-for="(message, index) in messages"
@@ -202,19 +170,32 @@ onMounted(() => {
   max-width: 800px;
   margin: 0 auto;
   padding: 20px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-interface {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  height: 600px;
   border: 1px solid #ddd;
   border-radius: 8px;
   background: white;
+  overflow: hidden;
+}
+
+.error-banner {
+  background-color: #dc3545;
+  color: white;
+  padding: 20px;
+  border-radius: 8px;
+  text-align: center;
+  margin-top: 20px;
 }
 
 .messages {
-  flex-grow: 1;
+  flex: 1;
   overflow-y: auto;
   padding: 20px;
   display: flex;
@@ -241,12 +222,6 @@ onMounted(() => {
   align-self: flex-start;
 }
 
-.error {
-  background-color: #dc3545;
-  color: white;
-  align-self: center;
-}
-
 .input-area {
   display: flex;
   gap: 10px;
@@ -255,7 +230,7 @@ onMounted(() => {
 }
 
 input {
-  flex-grow: 1;
+  flex: 1;
   padding: 10px;
   border: 1px solid #ddd;
   border-radius: 4px;
@@ -277,15 +252,6 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.error-banner {
-  background-color: #dc3545;
-  color: white;
-  padding: 10px;
-  border-radius: 4px;
-  margin-bottom: 10px;
-  text-align: center;
-}
-
 .typing {
   display: flex;
   align-items: center;
@@ -301,21 +267,12 @@ button:disabled {
   display: inline-block;
 }
 
-.dot:nth-child(1) {
-  animation-delay: -0.32s;
-}
-
-.dot:nth-child(2) {
-  animation-delay: -0.16s;
-}
+.dot:nth-child(1) { animation-delay: -0.32s; }
+.dot:nth-child(2) { animation-delay: -0.16s; }
 
 @keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-  }
-  40% {
-    transform: scale(1.0);
-  }
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1.0); }
 }
 
 button.loading {
@@ -339,8 +296,6 @@ button.loading::after {
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 </style>
