@@ -10,12 +10,12 @@ const isTyping = ref(false);
 const reconnectAttempts = ref(0);
 const MAX_RECONNECTS = 3;
 
-// Generate a random visitor ID that persists for the session
-const VISITOR_ID = ref(localStorage.getItem('visitorId') || Math.random().toString(36).substring(7));
-localStorage.setItem('visitorId', VISITOR_ID.value);
+// Generate random visitor ID that persists for the session
+const visitor_id = ref(localStorage.getItem('visitorId') || Math.random().toString(36).substring(7));
+localStorage.setItem('visitorId', visitor_id.value);
 
-const API_KEY = APP_PROPS.VITE_API_KEY;
-const API_BASE = APP_PROPS.VITE_API_BASE || 'http://localhost:8000/api/v1';
+const api_key = app_props.VITE_API_KEY;
+const api_base = app_props.VITE_API_BASE || 'http://localhost:8000/api/v1';
 
 // Auto-scroll messages
 watch(messages, async () => {
@@ -28,15 +28,15 @@ watch(messages, async () => {
 
 async function createConversation() {
   try {
-    const response = await fetch(`${API_BASE}/assistants/`, {
+    const response = await fetch(`${api_base}/assistants/`, {
       method: 'POST',
       headers: {
-        'Authorization': `ApiKey ${API_KEY}`,
-        'X-Visitor-ID': VISITOR_ID.value,
+        'Authorization': `ApiKey ${api_key}`,
+        'X-Visitor-ID': visitor_id.value,
         'Content-Type': 'application/json'
       }
     });
-
+    
     if (!response.ok) throw new Error('Failed to create conversation');
     
     const data = await response.json();
@@ -58,7 +58,7 @@ async function sendMessage() {
   const messageContent = newMessage.value;
   newMessage.value = '';
   error.value = null;
-
+  
   try {
     isLoading.value = true;
     isTyping.value = true;
@@ -67,19 +67,17 @@ async function sendMessage() {
       content: messageContent,
       role: 'user'
     });
-
+    
     const response = await fetch(
-      `${API_BASE}/assistants/${currentConversation.value}/send-message/`,
+      `${api_base}/assistants/${currentConversation.value}/send-message/`,
       {
         method: 'POST',
         headers: {
-          'Authorization': `ApiKey ${API_KEY}`,
-          'X-Visitor-ID': VISITOR_ID.value,
+          'Authorization': `ApiKey ${api_key}`,
+          'X-Visitor-ID': visitor_id.value,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          message: messageContent
-        })
+        body: JSON.stringify({ message: messageContent })
       }
     );
 
@@ -93,14 +91,14 @@ async function sendMessage() {
 
     const reader = response.body.getReader();
     let assistantMessage = '';
-
+    
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
+      
       const chunk = new TextDecoder().decode(value);
       const lines = chunk.split('\n');
-
+      
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
@@ -116,18 +114,16 @@ async function sendMessage() {
         }
       }
     }
-
+    
     if (assistantMessage) {
       messages.value.push({
         content: assistantMessage,
         role: 'assistant'
       });
     }
-
   } catch (error) {
     handleError('Message sending failed', error);
-    
-    // Try to recreate conversation if it's expired
+    // Try to recreate conversation if expired
     if (error.message.includes('expired')) {
       await reconnect();
     }
@@ -142,7 +138,6 @@ async function reconnect() {
     error.value = 'Maximum reconnection attempts reached. Please refresh the page.';
     return;
   }
-  
   reconnectAttempts.value++;
   await createConversation();
 }
@@ -168,33 +163,30 @@ onMounted(() => {
       <div v-if="error" class="error-banner">
         {{ error }}
       </div>
-      
       <div class="messages" ref="messageContainer">
-        <div 
-          v-for="(message, index) in messages" 
+        <div
+          v-for="(message, index) in messages"
           :key="index"
           :class="['message', message.role]"
         >
           {{ message.content }}
         </div>
-        
         <div v-if="isTyping" class="message assistant typing">
           <span class="dot"></span>
           <span class="dot"></span>
           <span class="dot"></span>
         </div>
       </div>
-      
       <div class="input-area">
-        <input 
-          v-model="newMessage" 
-          type="text" 
-          placeholder="Type your message..."
+        <input
+          v-model="newMessage"
+          type="text"
+          placeholder="Type a message..."
           @keyup.enter="sendMessage"
           :disabled="isLoading"
         >
-        <button 
-          @click="sendMessage" 
+        <button
+          @click="sendMessage"
           :disabled="isLoading || !newMessage.trim()"
           :class="{ loading: isLoading }"
         >
@@ -206,7 +198,84 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Previous styles remain the same */
+.chat-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.chat-interface {
+  display: flex;
+  flex-direction: column;
+  height: 600px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: white;
+}
+
+.messages {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.message {
+  max-width: 80%;
+  padding: 10px 15px;
+  border-radius: 15px;
+  margin: 5px 0;
+}
+
+.user {
+  background-color: #007bff;
+  color: white;
+  align-self: flex-end;
+}
+
+.assistant {
+  background-color: #f1f1f1;
+  color: black;
+  align-self: flex-start;
+}
+
+.error {
+  background-color: #dc3545;
+  color: white;
+  align-self: center;
+}
+
+.input-area {
+  display: flex;
+  gap: 10px;
+  padding: 20px;
+  border-top: 1px solid #ddd;
+}
+
+input {
+  flex-grow: 1;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+button {
+  padding: 10px 20px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 80px;
+}
+
+button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
 
 .error-banner {
   background-color: #dc3545;
@@ -232,24 +301,37 @@ onMounted(() => {
   display: inline-block;
 }
 
-.dot:nth-child(1) { animation-delay: -0.32s; }
-.dot:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1.0); }
+.dot:nth-child(1) {
+  animation-delay: -0.32s;
 }
 
-.button.loading {
+.dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1.0);
+  }
+}
+
+button.loading {
   position: relative;
   color: transparent;
 }
 
-.button.loading::after {
+button.loading::after {
   content: "";
   position: absolute;
   width: 16px;
   height: 16px;
+  top: 50%;
+  left: 50%;
+  margin-top: -8px;
+  margin-left: -8px;
   border: 2px solid transparent;
   border-top-color: white;
   border-radius: 50%;
@@ -257,6 +339,8 @@ onMounted(() => {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
