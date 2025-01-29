@@ -54,18 +54,24 @@ async function sendMessage() {
   const messageContent = newMessage.value;
   newMessage.value = '';
   error.value = null;
-  
+
   try {
     isLoading.value = true;
     isTyping.value = true;
-    
-    messages.value.push({
-      content: messageContent,
-      role: 'user'
+    messages.value.push({ content: messageContent, role: 'user' });
+
+    console.log('Sending message', {
+      url: `${api_base}/assistants/${conversationId.value}/send_message/`,
+      method: 'POST',
+      headers: {
+        'Authorization': `ApiKey ${api_key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ message: messageContent })
     });
-    
+
     const response = await fetch(
-      `${api_base}/assistants/${conversationId.value}/send-message/`,
+      `${api_base}/assistants/${conversationId.value}/send_message/`, 
       {
         method: 'POST',
         headers: {
@@ -77,7 +83,13 @@ async function sendMessage() {
     );
 
     if (!response.ok) {
-      throw new Error('Failed to send message');
+      const errorText = await response.text();
+      console.error('API Error:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      });
+      throw new Error(`Failed to send message: ${errorText}`);
     }
 
     const reader = response.body.getReader();
