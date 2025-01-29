@@ -51,35 +51,63 @@ async function createConversation() {
 }
 
 async function handleStreamResponse(reader) {
-  let assistantMessage = '';
+  const decoder = new TextDecoder();
+  let buffer = '';
   
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const text = new TextDecoder().decode(value);
-      const lines = text.split('\n');
-      
-      for (const line of lines) {
-        if (!line.trim() || !line.startsWith('data: ')) continue;
-        
+  const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
+  if (lastMessageIndex === -1) {
+    messages.value.push({ content: '', role: 'assistant' });
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop(); // Keep any incomplete line in buffer
+    
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
         try {
-          const data = JSON.parse(line.slice(5).trim());
-          if (data.content) {
-            return data.content;
+          const rawData = line.slice(6).trim();
+          const parsed = JSON.parse(rawData);
+          
+          console.log('Received data:', parsed);
+          
+          if (parsed.content) {
+            const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
+            
+            if (lastMessageIndex !== -1) {
+              messages.value[lastMessageIndex].content = parsed.content;
+            }
+          }
+          
+          if (parsed.error) {
+            error.value = parsed.error;
+            break;
           }
         } catch (e) {
-          console.error('Error parsing JSON:', e);
+          console.error('Parsing error:', e);
         }
       }
     }
-  } catch (err) {
-    console.error('Stream reading error:', err);
-    throw err;
   }
+
+  isTyping.value = false;
+}
+
+function updateAssistantMessage(newContent) {
+  // Find last assistant message or create new
+  const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
   
-  return assistantMessage;
+  if (lastMessageIndex === -1 || messages.value[lastMessageIndex].role !== 'assistant') {
+    messages.value.push({ content: newContent, role: 'assistant' });
+  } else {
+    messages.value[lastMessageIndex].content += newContent;
+  }
 }
 
 async function sendMessage() {
@@ -88,10 +116,14 @@ async function sendMessage() {
   const messageContent = newMessage.value;
   newMessage.value = '';
   error.value = null;
+  isTyping.value = true;  // Set typing indicator before sending
 
   try {
-    isLoading.value = true;
     messages.value.push({ content: messageContent, role: 'user' });
+
+    if (!threadId.value) {
+      await createConversation();
+    }
 
     const response = await fetch(
       `${api_base}/assistants/${conversationId.value}/send_message/`, 
@@ -107,34 +139,18 @@ async function sendMessage() {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('API Error:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorText
-      });
-      
-      if (response.status === 404) {
-        await createConversation();
-        return sendMessage();
-      }
-      
       throw new Error(`Failed to send message: ${errorText}`);
     }
 
     const reader = response.body.getReader();
-    const assistantMessage = await handleStreamResponse(reader);
-
-    if (assistantMessage) {
-      messages.value.push({
-        content: assistantMessage,
-        role: 'assistant'
-      });
-    }
+    await handleStreamResponse(reader);
+    
   } catch (err) {
+    console.error('Error in sendMessage:', err);
     error.value = err.message;
   } finally {
     isLoading.value = false;
-    isTyping.value = false;
+    isTyping.value = false;  // Ensure typing indicator is turned off
   }
 }
 
@@ -189,7 +205,8 @@ onMounted(() => {
   max-width: 800px;
   margin: 0 auto;
   padding: 20px;
-  height: 100vh;
+  height: calc(100vh - 100px);
+  min-height: 600px;
   display: flex;
   flex-direction: column;
 }
@@ -275,15 +292,17 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
+  padding: 10px 15px;
 }
 
 .dot {
   width: 8px;
   height: 8px;
-  background: #007bff;
+  background: #777;
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out;
   display: inline-block;
+  opacity: 0.5;
 }
 
 .dot:nth-child(1) { animation-delay: -0.32s; }
