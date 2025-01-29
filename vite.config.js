@@ -11,7 +11,7 @@ const appProps = {};
 
 for (const [key, value] of Object.entries(process.env)) {
   if (key.includes('VITE')) {
-  	appProps[key] = parsePropType(value);
+    appProps[key] = parsePropType(value);
   }
 }
 
@@ -29,16 +29,23 @@ function parsePropType(propStr) {
   }
 }
 
-console.log('mode:',mode);
-console.log('APP_PROPS:',appProps);
+console.log('mode:', mode);
+console.log('APP_PROPS:', appProps);
 
 export default defineConfig({
-	envDir:'config',
-	define: {
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    watch: {
+      usePolling: true
+    }
+  },
+  envDir: 'config',
+  define: {
     [propsName]: JSON.stringify(appProps)
   },
   plugins: [
-  	vue({})
+    vue({})
   ],
   resolve: {
     alias: {
