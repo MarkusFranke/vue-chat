@@ -4,6 +4,7 @@ import { ref, onMounted, watch, nextTick } from 'vue';
 const messages = ref([]);
 const newMessage = ref('');
 const conversationId = ref(null);
+const threadId = ref(null);
 const isLoading = ref(false);
 const error = ref(null);
 const isTyping = ref(false);
@@ -37,6 +38,7 @@ async function createConversation() {
     
     const data = await response.json();
     conversationId.value = data.id;
+    threadId.value = data.thread_id;
     
     // Add welcome message
     messages.value.push({
@@ -60,15 +62,10 @@ async function sendMessage() {
     isTyping.value = true;
     messages.value.push({ content: messageContent, role: 'user' });
 
-    console.log('Sending message', {
-      url: `${api_base}/assistants/${conversationId.value}/send_message/`,
-      method: 'POST',
-      headers: {
-        'Authorization': `ApiKey ${api_key}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ message: messageContent })
-    });
+    // Check if we need to recreate the conversation
+    if (!threadId.value) {
+      await createConversation();
+    }
 
     const response = await fetch(
       `${api_base}/assistants/${conversationId.value}/send_message/`, 
@@ -89,6 +86,13 @@ async function sendMessage() {
         statusText: response.statusText,
         body: errorText
       });
+      
+      // If thread not found, recreate conversation
+      if (response.status === 404) {
+        await createConversation();
+        return sendMessage(); // Retry sending the message
+      }
+      
       throw new Error(`Failed to send message: ${errorText}`);
     }
 
