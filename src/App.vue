@@ -50,6 +50,88 @@ async function createConversation() {
   }
 }
 
+async function handleStreamResponse(reader) {
+  let assistantMessage = '';
+  console.log('Starting to read stream');
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      console.log('Stream reading complete');
+      break;
+    }
+    
+    const chunk = new TextDecoder().decode(value);
+    console.log('Received chunk:', chunk);
+    
+    const lines = chunk.split('\n');
+    let currentEvent = '';
+    let currentData = '';
+    
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim();
+        console.log('Event:', currentEvent);
+      } else if (line.startsWith('data: ')) {
+        currentData = line.slice(6).trim();
+        console.log('Data:', currentData);
+      } else if (line === '' && currentEvent && currentData) {
+        // Process complete event
+        try {
+          const data = JSON.parse(currentData);
+          console.log('Processing event:', currentEvent, data);
+          
+          switch (currentEvent) {
+            case 'thread.message.created':
+              isTyping.value = true;
+              break;
+
+            case 'thread.message.completed':
+              if (data.content) {
+                console.log('Got message content:', data.content);
+                assistantMessage = data.content;
+                isTyping.value = false;
+              }
+              break;
+              
+            case 'thread.run.failed':
+            case 'error':
+              isTyping.value = false;
+              console.error('Error event:', data);
+              throw new Error(data.error || 'An error occurred');
+              
+            case 'thread.run.cancelled':
+            case 'thread.run.expired':
+              isTyping.value = false;
+              console.warn(`Run ${currentEvent}:`, data);
+              break;
+
+            case 'thread.run.queued':
+            case 'thread.run.in_progress':
+              isTyping.value = true;
+              break;
+              
+            case 'done':
+              console.log('Stream complete');
+              isTyping.value = false;
+              break;
+          }
+        } catch (e) {
+          console.error('Error parsing SSE data:', e);
+          throw e;
+        }
+        
+        // Reset event/data
+        currentEvent = '';
+        currentData = '';
+      }
+    }
+  }
+  
+  console.log('Final assistant message:', assistantMessage);
+  return assistantMessage;
+}
+
 async function sendMessage() {
   if (!newMessage.value.trim() || !conversationId.value) return;
   
@@ -59,7 +141,6 @@ async function sendMessage() {
 
   try {
     isLoading.value = true;
-    isTyping.value = true;
     messages.value.push({ content: messageContent, role: 'user' });
 
     // Check if we need to recreate the conversation
@@ -97,31 +178,8 @@ async function sendMessage() {
     }
 
     const reader = response.body.getReader();
-    let assistantMessage = '';
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const chunk = new TextDecoder().decode(value);
-      const lines = chunk.split('\n');
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.content) {
-              assistantMessage = data.content;
-            } else if (data.error) {
-              throw new Error(data.error);
-            }
-          } catch (e) {
-            console.error('Error parsing SSE data:', e);
-          }
-        }
-      }
-    }
-    
+    const assistantMessage = await handleStreamResponse(reader);
+
     if (assistantMessage) {
       messages.value.push({
         content: assistantMessage,
