@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, watch, nextTick } from 'vue';
+import { ref, onMounted, watch, nextTick, computed } from 'vue';
+import { watchEffect } from 'vue';
 
 const messages = ref([]);
 const newMessage = ref('');
@@ -8,10 +9,12 @@ const threadId = ref(null);
 const isLoading = ref(false);
 const error = ref(null);
 const isTyping = ref(false);
+const messageCounter = ref(0);
 
 // Access environment variables safely
 const api_key = import.meta.env.VITE_API_KEY;
 const api_base = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api/v1';
+
 
 // Auto-scroll messages
 watch(messages, async () => {
@@ -40,10 +43,13 @@ async function createConversation() {
     conversationId.value = data.id;
     threadId.value = data.thread_id;
     
-    // Add welcome message
+    // Add welcome message with unique key
     messages.value.push({
+      id: `msg-${messageCounter.value++}`,  // Use .value here
       content: "Hello! How can I help you today?",
-      role: 'assistant'
+      role: 'assistant',
+      status: 'complete',  // Add status
+      timestamp: Date.now()  // Add timestamp
     });
   } catch (err) {
     error.value = err.message;
@@ -52,84 +58,117 @@ async function createConversation() {
 
 async function handleStreamResponse(reader) {
   const decoder = new TextDecoder();
-  let buffer = '';
+  const messageId = `msg-${messageCounter.value++}`;
   
-  // Initialize the assistant message only once
-  messages.value.push({ content: '', role: 'assistant' });
+  // Initialize message
+  const initialMessage = {
+    id: messageId,
+    content: '',
+    role: 'assistant',
+    status: 'pending',
+    timestamp: Date.now()
+  };
+  
+  messages.value = [...messages.value, initialMessage];
   const messageIndex = messages.value.length - 1;
 
   try {
+    let buffer = '';
+    
     while (true) {
       const { done, value } = await reader.read();
+      if (done) break;
       
-      if (done) {
-        console.log('Stream complete');
-        break;
-      }
-      
-      // Decode and add to buffer
       buffer += decoder.decode(value, { stream: true });
       
-      // Process complete SSE messages
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || ''; // Keep incomplete chunk in buffer
-      
-      for (const line of lines) {
+      while (buffer.includes('\n\n')) {
+        const endIndex = buffer.indexOf('\n\n');
+        const line = buffer.slice(0, endIndex).trim();
+        buffer = buffer.slice(endIndex + 2);
+        
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6));
-            console.log('Received data:', data);
             
-            if (data.content) {
-              // Update the message content directly
-              messages.value[messageIndex].content = data.content;
-              console.log('Updated message content:', data.content);
-            } else if (data.status === 'thinking') {
-              console.log('Assistant is thinking');
-              isTyping.value = true;
-            } else if (data.error) {
-              console.error('Received error:', data.error);
-              error.value = data.error;
-              break;
-            }
+            // Create new message object with updated content and status
+            const updatedMessage = {
+              ...messages.value[messageIndex],
+              content: data.content || messages.value[messageIndex].content,
+              status: data.status || messages.value[messageIndex].status
+            };
+            
+            // Create new messages array with updated message
+            messages.value = [
+              ...messages.value.slice(0, messageIndex),
+              updatedMessage,
+              ...messages.value.slice(messageIndex + 1)
+            ];
+            
+            console.log('Stream update:', {
+              messageId,
+              content: data.content,
+              status: data.status
+            });
           } catch (e) {
-            console.error('Error parsing SSE message:', e, line);
+            console.error('Parse error:', e);
           }
         }
       }
     }
   } catch (err) {
-    console.error('Stream reading error:', err);
-    error.value = 'Error reading response stream';
-  } finally {
-    console.log('Stream handling complete');
-    isTyping.value = false;
-    
-    // If we had no content, remove the empty message
-    if (!messages.value[messageIndex].content) {
-      console.log('Removing empty message');
-      messages.value.splice(messageIndex, 1);
-    }
+    console.error('Stream error:', err);
+    // Update message status to error
+    const errorMessage = {
+      ...messages.value[messageIndex],
+      status: 'error',
+      content: 'Error processing message'
+    };
+    messages.value = [
+      ...messages.value.slice(0, messageIndex),
+      errorMessage,
+      ...messages.value.slice(messageIndex + 1)
+    ];
   }
 }
 
+watchEffect(() => {
+  console.log('Messages updated:', JSON.stringify(messages.value));
+});
+
+// Keep the computed for consistent display
+const displayMessages = computed(() => {
+  return messages.value.map(msg => ({
+    ...msg,
+    displayContent: msg.content || ''
+  }));
+});
+
+// Add message sending function
 async function sendMessage() {
   if (!newMessage.value.trim() || !conversationId.value) return;
   
+  console.log('[Send] Starting message send');
   const messageContent = newMessage.value;
   newMessage.value = '';
   error.value = null;
-  isTyping.value = true;  // Set typing indicator before sending
-
+  
   try {
-    messages.value.push({ content: messageContent, role: 'user' });
+    // Add user message
+    messages.value = [...messages.value, {
+      id: `msg-${messageCounter.value++}`,  // Use .value here
+      content: messageContent,
+      role: 'user',
+      status: 'complete',  // Add status
+      timestamp: Date.now()  // Add timestamp
+    }];
 
     if (!threadId.value) {
       await createConversation();
     }
 
+    console.log('[Send] Sending fetch request');
     const response = await fetch(
-      `${api_base}/assistants/${conversationId.value}/send_message/`, 
+      `${api_base}/assistants/${conversationId.value}/send_message/`,
       {
         method: 'POST',
         headers: {
@@ -141,26 +180,51 @@ async function sendMessage() {
     );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to send message: ${errorText}`);
+      throw new Error('Failed to send message');
     }
 
     const reader = response.body.getReader();
     await handleStreamResponse(reader);
-    
   } catch (err) {
-    console.error('Error in sendMessage:', err);
+    console.error('[Send] Error:', err);
     error.value = err.message;
-  } finally {
-    isLoading.value = false;
-    isTyping.value = false;  // Ensure typing indicator is turned off
   }
 }
+
+// Add logging to watch function
+watch(messages, (newVal, oldVal) => {
+  console.log('[Watch] Messages updated');
+  console.log('[Watch] Old value:', oldVal);
+  console.log('[Watch] New value:', newVal);
+  nextTick(() => {
+    const container = document.querySelector('.messages');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+      console.log('[Watch] Scrolled to bottom');
+    }
+  });
+}, { deep: true });
 
 // Initialize
 onMounted(() => {
   createConversation();
 });
+
+watch(messages, (newVal) => {
+  try {
+    console.log('Messages state:', {
+      count: newVal.length,
+      messages: newVal.map(m => ({
+        id: m.id,
+        content: m.content?.substring(0, 50),
+        status: m.status
+      }))
+    });
+  } catch (err) {
+    console.error('Error in messages watch:', err);
+  }
+}, { deep: true });
+
 </script>
 
 <template>
@@ -169,19 +233,23 @@ onMounted(() => {
       {{ error }}
     </div>
     <div v-else class="chat-interface">
-      <div class="messages" ref="messageContainer">
-        <div
-          v-for="(message, index) in messages"
-          :key="index"
-          :class="['message', message.role]"
-        >
-          {{ message.content }}
-        </div>
-        <div v-if="isTyping" class="message assistant typing">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
+      <div class="messages">
+        <TransitionGroup name="fade">
+          <div
+            v-for="message in messages"
+            :key="message.id"
+            :class="['message', message.role, message.status]"
+          >
+            <div class="message-content">
+              {{ message.content || '...' }}
+            </div>
+            <div v-if="message.status === 'pending'" class="typing-indicator">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+            </div>
+          </div>
+        </TransitionGroup>
       </div>
       <div class="input-area">
         <input
@@ -191,12 +259,11 @@ onMounted(() => {
           @keyup.enter="sendMessage"
           :disabled="isLoading"
         >
-        <button
+        <button 
           @click="sendMessage"
           :disabled="isLoading || !newMessage.trim()"
-          :class="{ loading: isLoading }"
         >
-          {{ isLoading ? '...' : 'Send' }}
+          Send
         </button>
       </div>
     </div>
@@ -221,6 +288,36 @@ onMounted(() => {
   border-radius: 8px;
   background: white;
   overflow: hidden;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 1em;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Add to existing styles */
+.message {
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.debug {
+  position: absolute;
+  bottom: -12px;
+  right: 5px;
+  font-size: 8px;
+  opacity: 0.5;
 }
 
 .error-banner {
@@ -337,5 +434,15 @@ button.loading::after {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>
