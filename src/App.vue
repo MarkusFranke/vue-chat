@@ -54,59 +54,62 @@ async function handleStreamResponse(reader) {
   const decoder = new TextDecoder();
   let buffer = '';
   
-  const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
-  if (lastMessageIndex === -1) {
-    messages.value.push({ content: '', role: 'assistant' });
-  }
+  // Initialize the assistant message only once
+  messages.value.push({ content: '', role: 'assistant' });
+  const messageIndex = messages.value.length - 1;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    
-    const lines = buffer.split('\n\n');
-    buffer = lines.pop(); // Keep any incomplete line in buffer
-    
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const rawData = line.slice(6).trim();
-          const parsed = JSON.parse(rawData);
-          
-          console.log('Received data:', parsed);
-          
-          if (parsed.content) {
-            const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        console.log('Stream complete');
+        break;
+      }
+      
+      // Decode and add to buffer
+      buffer += decoder.decode(value, { stream: true });
+      
+      // Process complete SSE messages
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || ''; // Keep incomplete chunk in buffer
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            console.log('Received data:', data);
             
-            if (lastMessageIndex !== -1) {
-              messages.value[lastMessageIndex].content = parsed.content;
+            if (data.content) {
+              // Update the message content directly
+              messages.value[messageIndex].content = data.content;
+              console.log('Updated message content:', data.content);
+            } else if (data.status === 'thinking') {
+              console.log('Assistant is thinking');
+              isTyping.value = true;
+            } else if (data.error) {
+              console.error('Received error:', data.error);
+              error.value = data.error;
+              break;
             }
+          } catch (e) {
+            console.error('Error parsing SSE message:', e, line);
           }
-          
-          if (parsed.error) {
-            error.value = parsed.error;
-            break;
-          }
-        } catch (e) {
-          console.error('Parsing error:', e);
         }
       }
     }
-  }
-
-  isTyping.value = false;
-}
-
-function updateAssistantMessage(newContent) {
-  // Find last assistant message or create new
-  const lastMessageIndex = messages.value.findLastIndex(msg => msg.role === 'assistant');
-  
-  if (lastMessageIndex === -1 || messages.value[lastMessageIndex].role !== 'assistant') {
-    messages.value.push({ content: newContent, role: 'assistant' });
-  } else {
-    messages.value[lastMessageIndex].content += newContent;
+  } catch (err) {
+    console.error('Stream reading error:', err);
+    error.value = 'Error reading response stream';
+  } finally {
+    console.log('Stream handling complete');
+    isTyping.value = false;
+    
+    // If we had no content, remove the empty message
+    if (!messages.value[messageIndex].content) {
+      console.log('Removing empty message');
+      messages.value.splice(messageIndex, 1);
+    }
   }
 }
 
@@ -205,8 +208,7 @@ onMounted(() => {
   max-width: 800px;
   margin: 0 auto;
   padding: 20px;
-  height: calc(100vh - 100px);
-  min-height: 600px;
+  height: 100vh;
   display: flex;
   flex-direction: column;
 }
